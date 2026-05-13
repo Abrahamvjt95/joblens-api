@@ -49,14 +49,20 @@ def get_client() -> OpenSearch:
     host = os.environ.get("OPENSEARCH_HOST", "localhost")
     port = int(os.environ.get("OPENSEARCH_PORT", 9200))
     use_ssl = os.environ.get("OPENSEARCH_USE_SSL", "false").lower() == "true"
+    user = os.environ.get("OPENSEARCH_USER", "")
+    password = os.environ.get("OPENSEARCH_PASSWORD", "")
 
-    return OpenSearch(
+    kwargs = dict(
         hosts=[{"host": host, "port": port}],
         http_compress=True,
         use_ssl=use_ssl,
-        verify_certs=False,
+        verify_certs=use_ssl,
         connection_class=RequestsHttpConnection,
     )
+    if user and password:
+        kwargs["http_auth"] = (user, password)
+
+    return OpenSearch(**kwargs)
 
 
 def ensure_index(client: OpenSearch) -> None:
