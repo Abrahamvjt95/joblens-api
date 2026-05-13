@@ -1,0 +1,5 @@
+import sys
+import os
+
+# Make lambdas importable without install
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "lambdas"))

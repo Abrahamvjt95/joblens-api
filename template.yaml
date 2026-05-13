@@ -1,0 +1,264 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Transform: AWS::Serverless-2016-10-31
+Description: JobLens — Serverless job search pipeline with OpenSearch
+
+Globals:
+  Function:
+    Runtime: python3.11
+    Timeout: 60
+    MemorySize: 256
+    Layers:
+      - !Ref SharedLayer
+    Environment:
+      Variables:
+        OPENSEARCH_HOST:  !Ref OpenSearchHost
+        OPENSEARCH_PORT:  "443"
+        OPENSEARCH_USE_SSL: "true"
+        OPENSEARCH_INDEX: "job-listings"
+        S3_BUCKET_RAW:      !Ref RawBucket
+        S3_BUCKET_NORMALIZED: !Ref NormalizedBucket
+        AWS_REGION:       !Ref AWS::Region
+
+Parameters:
+  OpenSearchHost:
+    Type: String
+    Description: OpenSearch domain endpoint (without https://)
+  AdzunaAppId:
+    Type: String
+    NoEcho: true
+  AdzunaAppKey:
+    Type: String
+    NoEcho: true
+
+Resources:
+  # ── S3 Buckets ────────────────────────────────────────────────────────────
+  RawBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub "joblens-raw-${AWS::AccountId}"
+      NotificationConfiguration:
+        LambdaConfigurations:
+          - Event: "s3:ObjectCreated:*"
+            Filter:
+              S3Key:
+                Rules:
+                  - Name: prefix
+                    Value: raw/
+            Function: !GetAtt NormalizerFunction.Arn
+
+  NormalizedBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub "joblens-normalized-${AWS::AccountId}"
+      NotificationConfiguration:
+        LambdaConfigurations:
+          - Event: "s3:ObjectCreated:*"
+            Filter:
+              S3Key:
+                Rules:
+                  - Name: prefix
+                    Value: normalized/
+            Function: !GetAtt IndexerFunction.Arn
+
+  # ── Shared Lambda Layer ───────────────────────────────────────────────────
+  SharedLayer:
+    Type: AWS::Serverless::LayerVersion
+    Properties:
+      LayerName: joblens-shared
+      ContentUri: lambdas/
+      CompatibleRuntimes:
+        - python3.11
+
+  # ── Orchestrator ─────────────────────────────────────────────────────────
+  OrchestratorFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: joblens-orchestrator
+      CodeUri: lambdas/orchestrator/
+      Handler: handler.handler
+      Description: Invokes all fetcher Lambdas in parallel (fan-out)
+      Timeout: 30
+      Environment:
+        Variables:
+          LAMBDA_FETCHER_ADZUNA:    !Sub "joblens-fetcher-adzuna"
+          LAMBDA_FETCHER_THEMUSE:   !Sub "joblens-fetcher-themuse"
+          LAMBDA_FETCHER_REMOTIVE:  !Sub "joblens-fetcher-remotive"
+          LAMBDA_FETCHER_ARBEITNOW: !Sub "joblens-fetcher-arbeitnow"
+      Events:
+        DailySchedule:
+          Type: Schedule
+          Properties:
+            Schedule: cron(0 6 * * ? *)   # 06:00 UTC daily
+            Name: joblens-daily-fetch
+            Description: Trigger daily job data refresh
+      Policies:
+        - LambdaInvokePolicy:
+            FunctionName: "*"
+
+  # ── Fetchers ─────────────────────────────────────────────────────────────
+  FetcherAdzunaFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: joblens-fetcher-adzuna
+      CodeUri: lambdas/fetchers/
+      Handler: handler.handler
+      Timeout: 120
+      Environment:
+        Variables:
+          FETCHER_SOURCE:    adzuna
+          ADZUNA_APP_ID:     !Ref AdzunaAppId
+          ADZUNA_APP_KEY:    !Ref AdzunaAppKey
+          ADZUNA_COUNTRIES:  gb,pt,de,es,fr
+      Policies:
+        - S3WritePolicy:
+            BucketName: !Ref RawBucket
+
+  FetcherTheMuseFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: joblens-fetcher-themuse
+      CodeUri: lambdas/fetchers/
+      Handler: handler.handler
+      Timeout: 60
+      Environment:
+        Variables:
+          FETCHER_SOURCE: themuse
+      Policies:
+        - S3WritePolicy:
+            BucketName: !Ref RawBucket
+
+  FetcherRemotiveFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: joblens-fetcher-remotive
+      CodeUri: lambdas/fetchers/
+      Handler: handler.handler
+      Timeout: 60
+      Environment:
+        Variables:
+          FETCHER_SOURCE: remotive
+      Policies:
+        - S3WritePolicy:
+            BucketName: !Ref RawBucket
+
+  FetcherArbeitnowFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: joblens-fetcher-arbeitnow
+      CodeUri: lambdas/fetchers/
+      Handler: handler.handler
+      Timeout: 60
+      Environment:
+        Variables:
+          FETCHER_SOURCE: arbeitnow
+      Policies:
+        - S3WritePolicy:
+            BucketName: !Ref RawBucket
+
+  # ── Normalizer ────────────────────────────────────────────────────────────
+  NormalizerFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: joblens-normalizer
+      CodeUri: lambdas/normalizer/
+      Handler: handler.handler
+      Timeout: 120
+      Description: Normalizes raw job data from S3 to unified schema
+      Policies:
+        - S3ReadPolicy:
+            BucketName: !Ref RawBucket
+        - S3WritePolicy:
+            BucketName: !Ref NormalizedBucket
+
+  NormalizerS3Permission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !GetAtt NormalizerFunction.Arn
+      Action: lambda:InvokeFunction
+      Principal: s3.amazonaws.com
+      SourceArn: !GetAtt RawBucket.Arn
+
+  # ── Indexer ───────────────────────────────────────────────────────────────
+  IndexerFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: joblens-indexer
+      CodeUri: lambdas/indexer/
+      Handler: handler.handler
+      Timeout: 120
+      Description: Deduplicates and bulk-indexes normalized jobs into OpenSearch
+      Policies:
+        - S3ReadPolicy:
+            BucketName: !Ref NormalizedBucket
+
+  IndexerS3Permission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !GetAtt IndexerFunction.Arn
+      Action: lambda:InvokeFunction
+      Principal: s3.amazonaws.com
+      SourceArn: !GetAtt NormalizedBucket.Arn
+
+  # ── API Gateway + Search Lambdas ─────────────────────────────────────────
+  JobsApi:
+    Type: AWS::Serverless::Api
+    Properties:
+      Name: joblens-api
+      StageName: v1
+      Cors:
+        AllowMethods: "'GET,OPTIONS'"
+        AllowHeaders: "'Content-Type'"
+        AllowOrigin: "'*'"
+
+  SearchFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: joblens-search
+      CodeUri: lambdas/search/
+      Handler: handler.handler
+      Description: Full-text search with aggregations and highlighting
+      Events:
+        SearchApi:
+          Type: Api
+          Properties:
+            RestApiId: !Ref JobsApi
+            Path: /jobs/search
+            Method: GET
+
+  AutocompleteFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: joblens-autocomplete
+      CodeUri: lambdas/autocomplete/
+      Handler: handler.handler
+      Description: Prefix autocomplete for job titles and companies
+      Events:
+        AutocompleteApi:
+          Type: Api
+          Properties:
+            RestApiId: !Ref JobsApi
+            Path: /jobs/autocomplete
+            Method: GET
+
+  HealthFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: joblens-health
+      CodeUri: lambdas/health/
+      Handler: handler.handler
+      Events:
+        HealthApi:
+          Type: Api
+          Properties:
+            RestApiId: !Ref JobsApi
+            Path: /health
+            Method: GET
+
+Outputs:
+  ApiEndpoint:
+    Description: API Gateway base URL
+    Value: !Sub "https://${JobsApi}.execute-api.${AWS::Region}.amazonaws.com/v1"
+  RawBucketName:
+    Value: !Ref RawBucket
+  NormalizedBucketName:
+    Value: !Ref NormalizedBucket
