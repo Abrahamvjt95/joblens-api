@@ -41,11 +41,21 @@ Resources:
     Type: AWS::S3::Bucket
     Properties:
       BucketName: !Sub "joblens-raw-${AWS::AccountId}"
+      LifecycleConfiguration:
+        Rules:
+          - Id: DeleteOldRawFiles
+            Status: Enabled
+            ExpirationInDays: 14
 
   NormalizedBucket:
     Type: AWS::S3::Bucket
     Properties:
       BucketName: !Sub "joblens-normalized-${AWS::AccountId}"
+      LifecycleConfiguration:
+        Rules:
+          - Id: DeleteOldNormalizedFiles
+            Status: Enabled
+            ExpirationInDays: 30
 
   # ── Orchestrator ─────────────────────────────────────────────────────────
   OrchestratorFunction:
@@ -143,6 +153,23 @@ Resources:
       Policies:
         - S3ReadPolicy:
             BucketName: !Ref NormalizedBucket
+
+  # ── Cleanup ───────────────────────────────────────────────────────────────
+  CleanupFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: joblens-cleanup
+      Handler: cleanup.handler.handler
+      Timeout: 60
+      Environment:
+        Variables:
+          JOBS_TTL_DAYS: "30"
+      Events:
+        DailyCleanup:
+          Type: Schedule
+          Properties:
+            Schedule: cron(30 7 * * ? *)
+            Description: "Delete OpenSearch jobs older than 30 days"
 
   # ── API Gateway + Search Lambdas ─────────────────────────────────────────
   JobsApi:
