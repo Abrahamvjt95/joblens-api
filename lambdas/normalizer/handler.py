@@ -19,6 +19,64 @@ logger = logging.getLogger(__name__)
 RAW_BUCKET = os.environ.get("S3_BUCKET_RAW", "joblens-raw")
 NORMALIZED_BUCKET = os.environ.get("S3_BUCKET_NORMALIZED", "joblens-normalized")
 
+# ── EU accessibility filter ──────────────────────────────────────────────────
+# Keywords that confirm a job is workable from Europe / Portugal
+_EU_OPEN = frozenset({
+    "worldwide", "world", "global", "anywhere", "international", "all countries",
+    "europe", "european", "emea", "eea", "cee",
+    "european timezone", "european time", "cet", "cest", "utc+1", "utc+0",
+    "portugal",
+})
+
+# Regions that block EU workers — if ALL parts of the location are here, reject
+_EU_BLOCKED = frozenset({
+    "united states", "usa", "u.s.", "u.s.a.",
+    "canada",
+    "united kingdom", "uk", "great britain", "england",
+    "germany",
+    "australia", "new zealand",
+    "north america", "americas", "latin america", "latam", "south america",
+    "brazil", "mexico", "argentina", "colombia", "chile", "peru", "ecuador",
+    "venezuela", "costa rica", "guatemala", "panama",
+    "india",
+    "japan", "singapore", "south korea", "china", "hong kong", "taiwan",
+    "malaysia", "indonesia", "philippines", "vietnam", "thailand",
+    "pakistan", "bangladesh",
+    "middle east", "gulf", "gcc", "mena", "africa", "sub-saharan africa",
+    "south africa", "nigeria", "kenya",
+})
+
+
+def _accessible_from_eu(location: str, strict: bool = False) -> bool:
+    """
+    Return True if a remote job is workable from Europe (Portugal).
+
+    strict=True  — used for array-based restrictions (Himalayas): only keep if an
+                   explicit EU/worldwide marker is present. Single-country EU
+                   restrictions that don't include Portugal are rejected.
+    strict=False — used for free-text fields (Jobicy, Remotive): reject only when
+                   every comma-separated part is a blocked region.
+    """
+    if not location:
+        return True
+    text = location.lower().strip()
+
+    for kw in _EU_OPEN:
+        if kw in text:
+            return True
+
+    if strict:
+        return False  # No EU/worldwide marker found in restricted list → reject
+
+    # Free-text: reject only if all comma-separated parts are clearly blocked
+    parts = {p.strip() for p in text.replace(";", ",").split(",") if p.strip()}
+    if parts and all(
+        any(blocked in part for blocked in _EU_BLOCKED) for part in parts
+    ):
+        return False
+
+    return True  # benefit of doubt for unknown locations
+
 # Source-specific normalizer functions
 def _normalize_adzuna(raw: dict) -> JobListing | None:
     try:
@@ -90,12 +148,15 @@ def _normalize_themuse(raw: dict) -> JobListing | None:
 
 def _normalize_remotive(raw: dict) -> JobListing | None:
     try:
+        candidate_location = raw.get("candidate_required_location", "") or ""
+        if not _accessible_from_eu(candidate_location, strict=False):
+            return None
         salary_min, salary_max, currency = parse_salary(raw.get("salary"))
         return JobListing(
             title=raw.get("title", "").strip(),
             company=raw.get("company_name", "Unknown"),
             description=raw.get("description", ""),
-            location=raw.get("candidate_required_location", "Worldwide"),
+            location=candidate_location or "Worldwide",
             country="",
             remote_type="remote",
             salary_min=salary_min,
@@ -155,6 +216,9 @@ def _normalize_himalayas(raw: dict) -> JobListing | None:
         description = raw.get("description", "")
 
         restrictions = raw.get("locationRestrictions") or []
+        restriction_text = " ".join(restrictions)
+        if not _accessible_from_eu(restriction_text, strict=True):
+            return None
         location = ", ".join(restrictions[:3]) if restrictions else "Worldwide"
 
         # seniority is a list e.g. ["Senior", "Mid-level"]
@@ -202,6 +266,8 @@ def _normalize_jobicy(raw: dict) -> JobListing | None:
         company = raw.get("companyName", "Unknown")
         description = raw.get("jobDescription", "")
         location = raw.get("jobGeo", "Worldwide") or "Worldwide"
+        if not _accessible_from_eu(location, strict=True):
+            return None
 
         job_level = (raw.get("jobLevel") or "").lower()
         _exp_map = {

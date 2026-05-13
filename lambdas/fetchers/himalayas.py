@@ -9,17 +9,17 @@ logger = logging.getLogger(__name__)
 SEARCH_URL = "https://himalayas.app/jobs/api/search"
 QUERIES = os.environ.get(
     "HIMALAYAS_QUERIES",
-    "software engineer,backend developer,frontend developer,full stack developer,"
+    "software engineer,backend developer,frontend developer,full stack,"
     "devops engineer,data engineer,python developer,javascript developer,"
-    "cloud engineer,platform engineer",
+    "cloud engineer,platform engineer,mobile developer,machine learning engineer",
 ).split(",")
-PAGES_PER_QUERY = int(os.environ.get("HIMALAYAS_PAGES", "3"))
+PAGES_PER_QUERY = int(os.environ.get("HIMALAYAS_PAGES", "5"))
 
 
 def fetch(query: str, page: int) -> list[dict]:
     response = requests.get(
         SEARCH_URL,
-        params={"q": query.strip(), "page": page},
+        params={"q": query.strip(), "page": page, "worldwide": "true"},
         timeout=20,
     )
     response.raise_for_status()
@@ -43,8 +43,8 @@ def fetch_all() -> list[dict]:
                 time.sleep(0.3)
             except requests.HTTPError as e:
                 if e.response is not None and e.response.status_code == 429:
-                    logger.warning("Himalayas rate limited q=%s page=%d", query, page)
-                    time.sleep(2)
+                    logger.warning("Himalayas rate limited q=%s page=%d, waiting", query, page)
+                    time.sleep(3)
                 else:
                     logger.error("Himalayas error q=%s page=%d: %s", query, page, e)
                 break
