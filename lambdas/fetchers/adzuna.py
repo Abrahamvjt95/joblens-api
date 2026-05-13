@@ -8,10 +8,14 @@ logger = logging.getLogger(__name__)
 BASE_URL = "https://api.adzuna.com/v1/api/jobs"
 APP_ID = os.environ.get("ADZUNA_APP_ID", "")
 APP_KEY = os.environ.get("ADZUNA_APP_KEY", "")
-COUNTRIES = os.environ.get("ADZUNA_COUNTRIES", "gb,pt,de,es").split(",")
+# Adzuna supported countries (pt/Portugal not available)
+COUNTRIES = os.environ.get("ADZUNA_COUNTRIES", "gb,de,fr,es,nl").split(",")
 PAGES_PER_COUNTRY = int(os.environ.get("ADZUNA_PAGES", "3"))
 RESULTS_PER_PAGE = 50
 TECH_QUERY = "software developer engineer"
+
+# Categories vary by country; use broad search without category for non-gb
+GB_CATEGORY = "it-jobs"
 
 
 def fetch(country: str, page: int = 1) -> list[dict]:
@@ -21,12 +25,12 @@ def fetch(country: str, page: int = 1) -> list[dict]:
         "app_key": APP_KEY,
         "results_per_page": RESULTS_PER_PAGE,
         "what": TECH_QUERY,
-        "category": "it-jobs",
-        "content-type": "application/json",
         "salary_include_unknown": 1,
-        "country": country,
     }
-    response = requests.get(url, params=params, timeout=15)
+    if country == "gb":
+        params["category"] = GB_CATEGORY
+    headers = {"Content-Type": "application/json"}
+    response = requests.get(url, params=params, headers=headers, timeout=15)
     response.raise_for_status()
     data = response.json()
     jobs = data.get("results", [])
