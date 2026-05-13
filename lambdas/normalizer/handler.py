@@ -128,13 +128,22 @@ def _normalize_arbeitnow(raw: dict) -> JobListing | None:
                 existing_tags=raw.get("tags", []),
             ),
             experience_level=infer_experience_level(raw.get("title", "")),
-            posted_at=raw.get("created_at", "")[:10] or None,
+            posted_at=_parse_arbeitnow_date(raw.get("created_at")),
             source="arbeitnow",
             apply_url=raw.get("url", ""),
         )
     except Exception as e:
         logger.warning("Arbeitnow normalize error: %s", e)
         return None
+
+
+def _parse_arbeitnow_date(value) -> str | None:
+    if value is None:
+        return None
+    if isinstance(value, int):
+        from datetime import datetime, timezone
+        return datetime.fromtimestamp(value, tz=timezone.utc).strftime("%Y-%m-%d")
+    return str(value)[:10] or None
 
 
 _NORMALIZERS = {
