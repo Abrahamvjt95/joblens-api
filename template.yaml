@@ -70,6 +70,8 @@ Resources:
           LAMBDA_FETCHER_THEMUSE:   joblens-fetcher-themuse
           LAMBDA_FETCHER_REMOTIVE:  joblens-fetcher-remotive
           LAMBDA_FETCHER_ARBEITNOW: joblens-fetcher-arbeitnow
+          LAMBDA_FETCHER_HIMALAYAS: joblens-fetcher-himalayas
+          LAMBDA_FETCHER_JOBICY:    joblens-fetcher-jobicy
       Policies:
         - LambdaInvokePolicy:
             FunctionName: "*"
@@ -126,6 +128,32 @@ Resources:
       Environment:
         Variables:
           FETCHER_SOURCE: arbeitnow
+      Policies:
+        - S3WritePolicy:
+            BucketName: !Ref RawBucket
+
+  FetcherHimalayasFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: joblens-fetcher-himalayas
+      Handler: fetchers.handler.handler
+      Timeout: 120
+      Environment:
+        Variables:
+          FETCHER_SOURCE: himalayas
+      Policies:
+        - S3WritePolicy:
+            BucketName: !Ref RawBucket
+
+  FetcherJobicyFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: joblens-fetcher-jobicy
+      Handler: fetchers.handler.handler
+      Timeout: 60
+      Environment:
+        Variables:
+          FETCHER_SOURCE: jobicy
       Policies:
         - S3WritePolicy:
             BucketName: !Ref RawBucket

@@ -17,6 +17,8 @@ FETCHER_FUNCTIONS = {
     "themuse":   os.environ.get("LAMBDA_FETCHER_THEMUSE",   "joblens-fetcher-themuse"),
     "remotive":  os.environ.get("LAMBDA_FETCHER_REMOTIVE",  "joblens-fetcher-remotive"),
     "arbeitnow": os.environ.get("LAMBDA_FETCHER_ARBEITNOW", "joblens-fetcher-arbeitnow"),
+    "himalayas": os.environ.get("LAMBDA_FETCHER_HIMALAYAS", "joblens-fetcher-himalayas"),
+    "jobicy":    os.environ.get("LAMBDA_FETCHER_JOBICY",    "joblens-fetcher-jobicy"),
 }
 
 

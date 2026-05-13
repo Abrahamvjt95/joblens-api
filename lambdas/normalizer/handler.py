@@ -6,6 +6,8 @@ import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
+from datetime import datetime, timezone
+
 from shared.models import JobListing
 from shared.utils import load_from_s3, save_to_s3, today_key, setup_logging
 from normalizer.salary_parser import parse_salary
@@ -146,11 +148,150 @@ def _parse_arbeitnow_date(value) -> str | None:
     return str(value)[:10] or None
 
 
+def _normalize_himalayas(raw: dict) -> JobListing | None:
+    try:
+        title = raw.get("title", "").strip()
+        company = raw.get("companyName", "Unknown")
+        description = raw.get("description", "")
+
+        restrictions = raw.get("locationRestrictions") or []
+        location = ", ".join(restrictions[:3]) if restrictions else "Worldwide"
+
+        # seniority is a list e.g. ["Senior", "Mid-level"]
+        seniority_list = raw.get("seniority") or []
+        seniority = seniority_list[0].lower() if seniority_list else ""
+        _exp_map = {
+            "junior": "junior", "junior-level": "junior",
+            "mid-level": "mid", "mid level": "mid",
+            "senior": "senior", "senior-level": "senior",
+            "lead": "senior", "manager": "senior",
+        }
+        experience_level = _exp_map.get(seniority) or infer_experience_level(title)
+
+        salary_min = float(raw["minSalary"]) if raw.get("minSalary") else None
+        salary_max = float(raw["maxSalary"]) if raw.get("maxSalary") else None
+        currency = raw.get("currency") or "USD"
+
+        apply_url = raw.get("applicationLink") or raw.get("url") or ""
+        posted_at = _parse_arbeitnow_date(raw.get("pubDate"))
+
+        return JobListing(
+            title=title,
+            company=company,
+            description=description,
+            location=location,
+            country="",
+            remote_type="remote",
+            salary_min=salary_min,
+            salary_max=salary_max,
+            salary_currency=currency,
+            stack=extract_stack(f"{title} {description}"),
+            experience_level=experience_level,
+            posted_at=posted_at,
+            source="himalayas",
+            apply_url=apply_url,
+        )
+    except Exception as e:
+        logger.warning("Himalayas normalize error: %s", e)
+        return None
+
+
+def _normalize_jobicy(raw: dict) -> JobListing | None:
+    try:
+        title = raw.get("jobTitle", "").strip()
+        company = raw.get("companyName", "Unknown")
+        description = raw.get("jobDescription", "")
+        location = raw.get("jobGeo", "Worldwide") or "Worldwide"
+
+        job_level = (raw.get("jobLevel") or "").lower()
+        _exp_map = {
+            "junior": "junior", "junior-level": "junior",
+            "mid-level": "mid", "mid level": "mid", "middle": "mid",
+            "senior": "senior", "senior-level": "senior",
+        }
+        experience_level = _exp_map.get(job_level) or infer_experience_level(title)
+
+        salary_min = float(raw["annualSalaryMin"]) if raw.get("annualSalaryMin") else None
+        salary_max = float(raw["annualSalaryMax"]) if raw.get("annualSalaryMax") else None
+        currency = raw.get("salaryCurrency") or "USD"
+
+        pub_date = raw.get("pubDate") or ""
+        posted_at = pub_date[:10] if pub_date else None
+
+        return JobListing(
+            title=title,
+            company=company,
+            description=description,
+            location=location,
+            country="",
+            remote_type="remote",
+            salary_min=salary_min,
+            salary_max=salary_max,
+            salary_currency=currency,
+            stack=extract_stack(
+                f"{title} {description}",
+                existing_tags=raw.get("jobIndustry") or [],
+            ),
+            experience_level=experience_level,
+            posted_at=posted_at,
+            source="jobicy",
+            apply_url=raw.get("url", ""),
+        )
+    except Exception as e:
+        logger.warning("Jobicy normalize error: %s", e)
+        return None
+
+
+def _normalize_remoteok(raw: dict) -> JobListing | None:
+    try:
+        title = raw.get("position", "").strip()
+        if not title:
+            return None
+        company = raw.get("company", "Unknown")
+        description = raw.get("description", "")
+        location = raw.get("location", "Worldwide") or "Worldwide"
+
+        salary_min = float(raw["salary_min"]) if raw.get("salary_min") else None
+        salary_max = float(raw["salary_max"]) if raw.get("salary_max") else None
+
+        epoch = raw.get("epoch")
+        if epoch:
+            posted_at = datetime.fromtimestamp(int(epoch), tz=timezone.utc).strftime("%Y-%m-%d")
+        else:
+            posted_at = (raw.get("date") or "")[:10] or None
+
+        return JobListing(
+            title=title,
+            company=company,
+            description=description,
+            location=location,
+            country="",
+            remote_type="remote",
+            salary_min=salary_min,
+            salary_max=salary_max,
+            salary_currency="USD" if (salary_min or salary_max) else None,
+            stack=extract_stack(
+                f"{title} {description}",
+                existing_tags=raw.get("tags") or [],
+            ),
+            experience_level=infer_experience_level(title),
+            posted_at=posted_at,
+            source="remoteok",
+            apply_url=raw.get("url", ""),
+        )
+    except Exception as e:
+        logger.warning("RemoteOK normalize error: %s", e)
+        return None
+
+
 _NORMALIZERS = {
-    "adzuna": _normalize_adzuna,
-    "themuse": _normalize_themuse,
-    "remotive": _normalize_remotive,
+    "adzuna":    _normalize_adzuna,
+    "themuse":   _normalize_themuse,
+    "remotive":  _normalize_remotive,
     "arbeitnow": _normalize_arbeitnow,
+    "himalayas": _normalize_himalayas,
+    "jobicy":    _normalize_jobicy,
+    "remoteok":  _normalize_remoteok,
 }
 
 

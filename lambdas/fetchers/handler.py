@@ -10,7 +10,7 @@ import sys
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from shared.utils import save_to_s3, today_key, setup_logging
-from fetchers import adzuna, themuse, remotive, arbeitnow
+from fetchers import adzuna, themuse, remotive, arbeitnow, himalayas, jobicy
 
 setup_logging()
 logger = logging.getLogger(__name__)
@@ -22,6 +22,8 @@ _FETCHERS = {
     "themuse":   themuse.fetch_all,
     "remotive":  remotive.fetch_all,
     "arbeitnow": arbeitnow.fetch_all,
+    "himalayas": himalayas.fetch_all,
+    "jobicy":    jobicy.fetch_all,
 }
 
 
